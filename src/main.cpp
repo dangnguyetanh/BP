@@ -7,30 +7,6 @@
 #include "mqtt.h"
 #include <ArduinoJson.h>
 
-#include <TensorFlowLite_ESP32.h>
-#include "model_data.h"
-#include <tensorflow/lite/micro/all_ops_resolver.h>
-#include <tensorflow/lite/micro/micro_interpreter.h>
-#include <tensorflow/lite/micro/micro_error_reporter.h>
-#include <tensorflow/lite/schema/schema_generated.h>
-#include <tensorflow/lite/micro/micro_mutable_op_resolver.h>
-#include <tensorflow/lite/micro/micro_allocator.h>
-
-// Cấu hình mô hình AI
-namespace {
-tflite::MicroInterpreter* interpreter = nullptr;
-TfLiteTensor* input = nullptr;
-TfLiteTensor* output = nullptr;
-constexpr int kTensorArenaSize = 16 * 1024;
-uint8_t tensor_arena[kTensorArenaSize];
-tflite::ErrorReporter* error_reporter = nullptr;
-const tflite::Model* model = nullptr;
-tflite::MicroAllocator* allocator = nullptr;
-}  // namespace
-
-// Thông số chuẩn hóa
-float scaler_mean[4] = { 79.53374663, 97.50437243, 124.4379712, 79.49962504 };
-float scaler_scale[4] = { 11.55286498, 1.44259433, 8.65692398, 5.75723374 };
 
 // Biến và hằng số cho cảm biến MAX30100
 PulseOximeter pox;
@@ -50,7 +26,6 @@ float lastHeartRate = 0;         // Giá trị HR cuối cùng để so sánh
 int lastSpO2 = 0;                // Giá trị SpO2 cuối cùng để so sánh
 float finalHeartRate = 0;        // Giá trị HR cuối cùng đã xác định
 int finalSpO2 = 0;               // Giá trị SpO2 cuối cùng đã xác định
-String riskResult = "";          // Kết quả đánh giá nguy cơ
 
 // Enum trạng thái chương trình
 enum ProgramState {
@@ -86,47 +61,6 @@ void onBeatDetected() {
   }
 }
 
-// Hàm đánh giá nguy cơ sức khỏe sử dụng mô hình AI
-String assessHealthRisk(float hr, int spo2, float sbp, float dbp) {
-  // Tạo mảng dữ liệu cho mô hình
-  float raw_data[4] = { hr, (float)spo2, sbp, dbp };
-
-  Serial.println("Measurements array:");
-  for (int i = 0; i < 4; i++) {
-    Serial.print(raw_data[i]);
-    Serial.print(" ");
-  }
-  Serial.println();
-
-  // Chuẩn hóa dữ liệu
-  float input_data[4];
-  for (int i = 0; i < 4; i++) {
-    input_data[i] = (raw_data[i] - scaler_mean[i]) / scaler_scale[i];
-  }
-
-  // Đưa dữ liệu vào mô hình
-  for (int i = 0; i < 4; i++) {
-    input->data.f[i] = input_data[i];
-  }
-
-  // Chạy suy luận
-  TfLiteStatus invoke_status = interpreter->Invoke();
-  if (invoke_status != kTfLiteOk) {
-    error_reporter->Report("Invoke failed!");
-    return "Error";
-  }
-
-  // Lấy kết quả
-  float probability = output->data.f[0];
-  String risk = (probability > 0.5) ? "High Risk" : "Low Risk";
-  Serial.print("Probability: ");
-  Serial.print(probability);
-  Serial.print(" | Risk: ");
-  Serial.println(risk);
-
-  return risk;
-}
-
 // Hàm hiển thị thông báo lên màn hình
 void displayMessage(const char* messages[], int lines, int textSize = 2, int x = 64, int y = 64) {
   M5.Display.fillScreen(BLACK);
@@ -156,48 +90,6 @@ void setup() {
     delay(1000);
   }
   Serial.println("Time synchronized");
-
-  // Thiết lập ErrorReporter cho AI
-  static tflite::MicroErrorReporter micro_error_reporter;
-  error_reporter = &micro_error_reporter;
-
-  // Load mô hình AI
-  model = tflite::GetModel(health_risk_model_tflite);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    error_reporter->Report("Model version mismatch!");
-    const char* modelErrorMsg[] = { "MODEL ERROR", "VERSION MISMATCH" };
-    displayMessage(modelErrorMsg, 2);
-    while (1) delay(100);
-  }
-
-  // Thiết lập OpResolver
-  static tflite::MicroMutableOpResolver<5> micro_op_resolver;
-  micro_op_resolver.AddFullyConnected();
-  micro_op_resolver.AddRelu();
-  micro_op_resolver.AddLogistic();
-  micro_op_resolver.AddReshape();
-  micro_op_resolver.AddQuantize();
-
-  // Thiết lập MicroAllocator
-  allocator = tflite::MicroAllocator::Create(tensor_arena, kTensorArenaSize, error_reporter);
-
-  // Khởi tạo interpreter
-  static tflite::MicroInterpreter static_interpreter(
-    model, micro_op_resolver, allocator, error_reporter);
-  interpreter = &static_interpreter;
-
-  // Cấp phát bộ nhớ
-  TfLiteStatus allocate_status = interpreter->AllocateTensors();
-  if (allocate_status != kTfLiteOk) {
-    error_reporter->Report("AllocateTensors() failed");
-    const char* tensorErrorMsg[] = { "AI ERROR", "TENSOR ALLOCATION" };
-    displayMessage(tensorErrorMsg, 2);
-    while (1) delay(100);
-  }
-
-  // Lấy tensor input và output
-  input = interpreter->input(0);
-  output = interpreter->output(0);
 
   // Khởi tạo cảm biến MAX30100
   Serial.print("Initializing pulse oximeter..");
@@ -253,8 +145,9 @@ void setup() {
 void loop() {
   if (!mqttClient.connected()) mqttReconnect();
   mqttClient.loop();
+  mqttClient.publish(mqtt_topic, "loop running");
   unsigned long currentMillis = millis();
-
+  
   M5.update();
   pox.update();
 
@@ -461,8 +354,7 @@ void loop() {
         programState = AWAITING_BP_START;
         check_state();
 
-        // Hiển thị thông báo sẵn sàng đo lại
-        delay(2000);  // Chờ 2 giây để người dùng đọc thông báo "MEASUREMENT STOPPED"
+        delay(2000);  
 
         const char* readyMsg[] = { "PRESS BUTTON", "TO RESTART BP" };
         displayMessage(readyMsg, 2);
@@ -501,15 +393,18 @@ void loop() {
         // Kiểm tra khi quá trình thu thập dữ liệu kết thúc
         if (state == IDLE && dataCount > 0) {
           check_state();
-          // bp_process(dataArr, dataCount);
-
-          // Đánh giá nguy cơ sức khỏe sử dụng AI
-          riskResult = assessHealthRisk(finalHeartRate, finalSpO2, SBP_value, DBP_value);
+          bp_process(dataArr, dataCount);
 
           Serial.println("Data collection completed. Printing data:");
 
           // In dữ liệu áp suất
           for (int i = 0; i < dataCount; i++) {
+            bool result = mqttClient.publish(mqtt_topic, String(dataArr[i]).c_str());
+            Serial.print("Publish dataArr[");
+            Serial.print(i);
+            Serial.print("]: ");
+            Serial.println(result ? "Success" : "Fail");
+
             Serial.print(dataArr[i]);
             Serial.print(", ");
             if (i % 10 == 9) {
@@ -521,38 +416,6 @@ void loop() {
           Serial.print("Total samples collected: ");
           Serial.println(dataCount);
 
-
-StaticJsonDocument<256> doc;  // Increased size to accommodate risk field
-doc["systolic"] = round(SBP_value);         // Làm tròn thành số nguyên
-doc["diastolic"] = round(DBP_value);        // Làm tròn thành số nguyên
-doc["heart_rate"] = round(finalHeartRate);  // Làm tròn thành số nguyên
-doc["spo2"] = finalSpO2;                    // SpO2 đã là số nguyên
-doc["risk"] = riskResult;                   // Thêm kết quả đánh giá nguy cơ
-doc["timestamp"] = getTimestamp();          // Thời gian
-
-// Serialize JSON thành chuỗi
-char jsonBuffer[256];  // Increased buffer size
-serializeJson(doc, jsonBuffer);
-
-// Gửi lên MQTT broker
-if (mqttClient.publish(mqtt_topic, jsonBuffer)) {
-  Serial.println("Published to MQTT: ");
-  Serial.println(jsonBuffer);
-} else {
-  Serial.println("Failed to publish to MQTT");
-}
-          // In kết quả đo
-          Serial.print("SpO2: ");
-          Serial.print(finalSpO2);
-          Serial.print("%, Heart Rate: ");
-          Serial.print(finalHeartRate);
-          Serial.print(" bpm, SBP: ");
-          Serial.print(SBP_value);
-          Serial.print(" mmHg, DBP: ");
-          Serial.print(DBP_value);
-          Serial.print(" mmHg, Risk: ");
-          Serial.println(riskResult);
-
           // Hiển thị kết quả đo trên màn hình
           M5.Display.fillScreen(BLACK);
           M5.Display.setTextSize(2);
@@ -562,7 +425,6 @@ if (mqttClient.publish(mqtt_topic, jsonBuffer)) {
           sprintf(spo2Str, "SpO2: %d%%", finalSpO2);
           sprintf(sbpStr, "SBP: %.0f", SBP_value);
           sprintf(dbpStr, "DBP: %.0f", DBP_value);
-          sprintf(riskStr, "Risk: %s", riskResult.c_str());
 
           M5.Display.drawString("RESULTS:", 64, 20);
           M5.Display.setTextSize(1);
@@ -572,11 +434,11 @@ if (mqttClient.publish(mqtt_topic, jsonBuffer)) {
           M5.Display.drawString(dbpStr, 64, 105);
 
           // Đặt màu cho kết quả nguy cơ
-          if (riskResult == "High Risk") {
-            M5.Display.setTextColor(RED);
-          } else {
-            M5.Display.setTextColor(GREEN);
-          }
+          // if (riskResult == "High Risk") {
+          //   M5.Display.setTextColor(RED);
+          // } else {
+          //   M5.Display.setTextColor(GREEN);
+          // }
           M5.Display.drawString(riskStr, 64, 125);
           M5.Display.setTextColor(WHITE);
           M5.Display.drawString("PRESS BUTTON TO RESTART", 64, 145);

@@ -4,14 +4,14 @@
 #include <WiFi.h>
 #include <time.h>
 // WiFi credentials
-const char* ssid = "Fuvitech";
-const char* password = "fuvitech.vn";
+const char* ssid = "Nguyet Anh";
+const char* password = "khoa5470";
 
-const char* mqtt_server = "app.coreiot.io"; 
+const char* mqtt_server = "mqtt.fuvitech.vn"; 
 const int mqtt_port = 1883;
 const char* mqtt_topic = "v1/devices/me/telemetry";
-const char* mqtt_user = "bp";           // Username MQTT
-const char* mqtt_password = "bp";  // Password MQTT
+// const char* mqtt_user = "bp";           // Username MQTT
+// const char* mqtt_password = "bp";  // Password MQTT
 const char* clientID = "bp";
 
 WiFiClient espClient;
@@ -33,7 +33,7 @@ void mqttReconnect()
 {
   while (!mqttClient.connected()) {
     Serial.println("Attempting MQTT connection...");
-    if (mqttClient.connect(clientID, mqtt_user, mqtt_password)) 
+    if (mqttClient.connect(clientID)) 
     {
       Serial.println("Connected to MQTT broker");
       mqttClient.subscribe(mqtt_topic);
