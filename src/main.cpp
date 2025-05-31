@@ -400,11 +400,9 @@ void loop() {
             programState = AWAITING_BP_START;
           }
         } else {
-          // Nếu giá trị không hợp lệ, reset biến đếm ổn định
           stableCount = 0;
         }
 
-        // Bỏ phần kiểm tra số lần đo tối đa và reset cảm biến
       }
 
       // Kiểm tra nút nhấn để bỏ qua đo SpO2 (trường hợp khẩn cấp)
@@ -495,12 +493,15 @@ void loop() {
           dataArr[dataCount++] = pressure;
         }
 
+        
+
+
         check_state();
 
         // Kiểm tra khi quá trình thu thập dữ liệu kết thúc
         if (state == IDLE && dataCount > 0) {
           check_state();
-          bp_process(dataArr, dataCount);
+          // bp_process(dataArr, dataCount);
 
           // Đánh giá nguy cơ sức khỏe sử dụng AI
           riskResult = assessHealthRisk(finalHeartRate, finalSpO2, SBP_value, DBP_value);
@@ -521,25 +522,25 @@ void loop() {
           Serial.println(dataCount);
 
 
-          StaticJsonDocument<128> doc;
-          doc["systolic"] = round(SBP_value);         // Làm tròn thành số nguyên
-          doc["diastolic"] = round(DBP_value);        // Làm tròn thành số nguyên
-          doc["heart_rate"] = round(finalHeartRate);  // Làm tròn thành số nguyên
-          doc["spo2"] = finalSpO2;                    // SpO2 đã là số nguyên
-          doc["timestamp"] = getTimestamp();          // Thời gian
+StaticJsonDocument<256> doc;  // Increased size to accommodate risk field
+doc["systolic"] = round(SBP_value);         // Làm tròn thành số nguyên
+doc["diastolic"] = round(DBP_value);        // Làm tròn thành số nguyên
+doc["heart_rate"] = round(finalHeartRate);  // Làm tròn thành số nguyên
+doc["spo2"] = finalSpO2;                    // SpO2 đã là số nguyên
+doc["risk"] = riskResult;                   // Thêm kết quả đánh giá nguy cơ
+doc["timestamp"] = getTimestamp();          // Thời gian
 
-          // Serialize JSON thành chuỗi
-          char jsonBuffer[128];
-          serializeJson(doc, jsonBuffer);
+// Serialize JSON thành chuỗi
+char jsonBuffer[256];  // Increased buffer size
+serializeJson(doc, jsonBuffer);
 
-          // Gửi lên MQTT broker
-          if (mqttClient.publish(mqtt_topic, jsonBuffer)) {
-            Serial.println("Published to MQTT: ");
-            Serial.println(jsonBuffer);
-          } else {
-            Serial.println("Failed to publish to MQTT");
-          }
-
+// Gửi lên MQTT broker
+if (mqttClient.publish(mqtt_topic, jsonBuffer)) {
+  Serial.println("Published to MQTT: ");
+  Serial.println(jsonBuffer);
+} else {
+  Serial.println("Failed to publish to MQTT");
+}
           // In kết quả đo
           Serial.print("SpO2: ");
           Serial.print(finalSpO2);
