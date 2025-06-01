@@ -1,4 +1,4 @@
-#include <PubsubClient.h>
+#include <PubSubClient.h>
 #include <Arduino.h>
 #include <time.h>
 #include <WiFi.h>
@@ -7,15 +7,26 @@
 const char* ssid = "Nguyet Anh";
 const char* password = "khoa5470";
 
+// First MQTT broker for data collection
 const char* mqtt_server = "mqtt.fuvitech.vn"; 
 const int mqtt_port = 1883;
 const char* mqtt_topic = "Khoa/data";
-// const char* mqtt_user = "bp";           // Username MQTT
-// const char* mqtt_password = "bp";  // Password MQTT
-const char* clientID = "bp";
+const char* clientID = "ESP32";
 
+// Second MQTT broker for risk prediction results
+const char* results_mqtt_server = "app.coreiot.io"; // Replace with actual broker
+const int results_mqtt_port = 1883;
+const char* results_mqtt_topic = "v1/devices/me/telemetry";
+const char* results_mqtt_user = "bp";        // Username for results broker
+const char* results_mqtt_password = "bp";    // Password for results broker
+const char* results_clientID = "bp";
+
+// Create two separate clients
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+WiFiClient resultsClient;
+PubSubClient resultsMqttClient(resultsClient);
 
 void connectWiFi() {
   Serial.print("Connecting to WiFi...");
@@ -37,6 +48,7 @@ void mqttReconnect()
     {
       Serial.println("Connected to MQTT broker");
       mqttClient.subscribe(mqtt_topic);
+      mqttClient.subscribe("Khoa/bp_results"); // Make sure to subscribe to BP results topic
     } 
     else 
     {
@@ -44,6 +56,25 @@ void mqttReconnect()
       Serial.print(mqttClient.state());
       Serial.println(" Retrying in 5 seconds...");
       delay(5000);
+    }
+  }
+}
+
+void resultsMqttReconnect() 
+{
+  // Only try to connect if not already connected
+  if (!resultsMqttClient.connected()) {
+    Serial.println("Attempting connection to results MQTT broker...");
+    // Connect with username and password
+    if (resultsMqttClient.connect(results_clientID, results_mqtt_user, results_mqtt_password)) 
+    {
+      Serial.println("Connected to results MQTT broker");
+    } 
+    else 
+    {
+      Serial.print("Failed to connect to results broker, rc=");
+      Serial.print(resultsMqttClient.state());
+      Serial.println(" Will try again when needed");
     }
   }
 }

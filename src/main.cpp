@@ -102,24 +102,37 @@ void predictHealthRisk(float heartRate, int spO2, float sbp, float dbp) {
   Serial.print("Risk prediction: ");
   Serial.println(riskResult);
   
-  // Publish the complete result back to MQTT
-  DynamicJsonDocument resultDoc(256);
-  resultDoc["HR"] = heartRate;
-  resultDoc["SPO2"] = spO2;
-  resultDoc["SBP"] = sbp;
-  resultDoc["DBP"] = dbp;
-  resultDoc["Risk"] = riskResult;
+  // Get current timestamp
+  String timestamp = getTimestamp();
   
-  String resultJson;
-  serializeJson(resultDoc, resultJson);
-  mqttClient.publish("Khoa/health_results", resultJson.c_str());
+  if (resultsMqttClient.connected()) {
+    // Create the JSON document for the results
+    DynamicJsonDocument resultsDoc(256);
+    resultsDoc["systolic"] = round(sbp * 10) / 10.0;    // Round to 1 decimal place
+    resultsDoc["diastolic"] = round(dbp * 10) / 10.0;   // Round to 1 decimal place
+    resultsDoc["heart_rate"] = round(heartRate * 10) / 10.0;
+    resultsDoc["spo2"] = spO2;
+    resultsDoc["risk"] = riskResult;
+    resultsDoc["timestamp"] = timestamp;
+    
+    String resultsJson;
+    serializeJson(resultsDoc, resultsJson);
+    
+    // Publish to the results MQTT broker
+    bool published = resultsMqttClient.publish(results_mqtt_topic, resultsJson.c_str());
+    
+    if (published) {
+      Serial.println("Published results to external MQTT broker:");
+      Serial.println(resultsJson);
+    } else {
+      Serial.println("Failed to publish results to external broker");
+    }
+  } else {
+    Serial.println("Could not connect to external MQTT broker for results");
+  }
 }
 // Add this callback function for MQTT message reception
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  
   // Create a buffer for the payload
   char message[length + 1];
   for (int i = 0; i < length; i++) {
@@ -234,11 +247,18 @@ void setup() {
   Wire.begin(2, 1);
 
   connectWiFi();
+  
+  // Set up the first MQTT client
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   mqttReconnect();
+  resultsMqttReconnect();
   mqttClient.subscribe("Khoa/bp_results");
   mqttClient.publish(mqtt_topic, "hello from ESP32");
+  
+  // Set up the second MQTT client for results
+  resultsMqttClient.setServer(results_mqtt_server, results_mqtt_port);
+  
   // Configure NTP for real-time
   configTime(7 * 3600, 0, "pool.ntp.org");  // UTC+7 for Vietnam
   while (!time(nullptr)) {
@@ -301,6 +321,8 @@ void setup() {
 void loop() {
   if (!mqttClient.connected()) mqttReconnect();
   mqttClient.loop();
+  if (!resultsMqttClient.connected()) resultsMqttReconnect();
+  resultsMqttClient.loop();
   unsigned long currentMillis = millis();
   
   M5.update();
@@ -390,7 +412,7 @@ void loop() {
         M5.Display.setTextSize(2);
 
         char hrStr[20], spo2Str[20], countStr[20];
-        sprintf(hrStr, "HR: %.1f bpm", heartRate);
+        sprintf(hrStr, "HR: %.1f", heartRate);
         sprintf(spo2Str, "SpO2: %d%%", spO2);
         sprintf(countStr, "Stable: %d/5", stableCount);
 
@@ -443,7 +465,7 @@ void loop() {
             M5.Display.drawString(finalHrStr, 64, 60);
             M5.Display.drawString(finalSpo2Str, 64, 90);
             M5.Display.setTextSize(1);
-            M5.Display.drawString("PRESS BUTTON FOR BP MEASURE", 64, 120);
+            M5.Display.drawString("PRESS BUTTON", 64, 120);
 
             programState = AWAITING_BP_START;
           }
@@ -524,7 +546,7 @@ void loop() {
         sprintf(pressureStr, "%.0f mmHg", pressure);
 
         M5.Display.fillScreen(BLACK);
-        M5.Display.setTextSize(2);
+        M5.Display.setTextSize(1.5);
         M5.Display.drawString("MEASURING BP", 64, 40);
         M5.Display.drawString(pressureStr, 64, 80);
       }

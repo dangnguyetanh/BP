@@ -159,7 +159,7 @@ def analyze_bp_data(original, mqtt_client):
     plt.scatter([MAP_idx], [original[MAP_idx]], color='black', label=f"MAP = {MAP_value:.2f}", zorder=5)
     plt.scatter([SBP_idx], [original[SBP_idx]], color='orange', label=f"SYS = {SBP_value:.2f}", zorder=5)
     plt.scatter([DBP_idx], [original[DBP_idx]], color='orange', label=f"DIA = {DBP_value:.2f}", zorder=5)
-    plt.title("Blood Pressure Analysis from MQTT Data")
+    plt.title("Blood Pressure Analysis with ML")
     plt.xlabel("Sample Index")
     plt.ylabel("Blood Pressure (mmHg)")
     plt.grid(True)
