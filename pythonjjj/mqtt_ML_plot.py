@@ -5,11 +5,14 @@ from skimage.restoration import denoise_wavelet
 import paho.mqtt.client as mqtt
 import time
 import json
+import os
 
 # === Global variables to store MQTT data ===
 pressure_data = []
 data_ready = False
 last_message_time = 0
+start_time = 0  # To track when the first data point is received
+csv_file_path = "test_data.csv"  # Path to save the CSV file
 
 # === MQTT callbacks and setup ===
 def on_connect(client, userdata, flags, rc, properties):
@@ -18,13 +21,33 @@ def on_connect(client, userdata, flags, rc, properties):
     client.subscribe("Khoa/data")
 
 def on_message(client, userdata, msg):
-    global pressure_data, data_ready, last_message_time
+    global pressure_data, data_ready, last_message_time, start_time
     try:
         # Assuming data is published as single floating point values
         value = float(msg.payload.decode())
+        
+        # If this is the first data point or we're starting a new batch,
+        # reset the start time and create a new CSV file
+        if not pressure_data:
+            start_time = time.time()
+            # Initialize the CSV file with headers
+            with open(csv_file_path, 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Time (s)", "Pressure (mmHg)"])
+                
+        current_time = time.time()
+        elapsed_time = current_time - start_time
+        
+        # Append the data to our pressure_data list
         pressure_data.append(value)
-        last_message_time = time.time()  # Update last message timestamp
-        print(f"Received data point: {value}, Total points: {len(pressure_data)}")
+        
+        # Also write it immediately to the CSV file
+        with open(csv_file_path, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([f"{elapsed_time:.1f}", value])
+        
+        last_message_time = current_time
+        print(f"Received data point: {value}, Total points: {len(pressure_data)}, Time: {elapsed_time:.1f}s")
         
         # Reset data_ready flag if we're receiving new data
         data_ready = False
@@ -144,11 +167,18 @@ def analyze_bp_data(original, mqtt_client):
     plt.tight_layout()
     plt.show()
     
-    # Reset data collection after analysis
-    global pressure_data, data_ready, last_message_time
+    # Reset data collection after analysis and prepare for next batch
+    global pressure_data, data_ready, last_message_time, start_time
     pressure_data = []
     data_ready = False
     last_message_time = 0
+    start_time = 0
+    
+    # Clear the CSV file for the next session
+    with open(csv_file_path, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Time (s)", "Pressure (mmHg)"])
+    print(f"Reset CSV file {csv_file_path} for next data collection")
 
 if __name__ == "__main__":
     # MQTT client setup
@@ -159,6 +189,12 @@ if __name__ == "__main__":
     # Change these parameters based on your MQTT broker settings
     mqtt_broker = "mqtt.fuvitech.vn"  # Change to your broker address
     mqtt_port = 1883
+    
+    # Initialize CSV file with headers
+    with open(csv_file_path, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Time (s)", "Pressure (mmHg)"])
+    print(f"Initialized CSV file at {csv_file_path}")
     
     try:
         client.connect(mqtt_broker, mqtt_port, 60)

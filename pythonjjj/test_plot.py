@@ -1,5 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import csv
+
+# === Load CSV ===
+def load_csv(filename):
+    pressures = []
+    with open(filename, 'r') as file:
+        reader = csv.reader(file)
+        next(reader)
+        for row in reader:
+            try:
+                pressures.append(float(row[1]))
+            except:
+                continue
+    return np.array(pressures)
 
 # === SOS filter without scipy ===
 def sos_filter(data, sos):
@@ -42,49 +56,63 @@ def linear_interpolate(x, y, xi):
     return yi
 
 # === Main logic ===
-def plot_full_map_analysis(data):
+def plot_full_map_analysis(csv_file):
+    original = load_csv(csv_file)
     sos = [
         [0.23411641, 0.46823283, 0.23411641, 1.0, -0.00244205, 0.27115388],
         [1.0, -2.0, 1.0, 1.0, -1.57146442, 0.6722172]
     ]
-    y_raw = sos_filter(data, sos)
-
+    y_raw = sos_filter(original, sos)
+    # print(y_raw)
+    # print(f"Length of y_raw: {len(y_raw)}")
+    # print(original)
     filtered = np.array([
         y * 45 if (i > 50 and abs(y) < 4) else 0
         for i, y in enumerate(y_raw)
     ])
-
+    # print(filtered)
     x = np.arange(len(filtered))
+    # print(x)
 
     lmin = hl_extrema_idx(filtered, mode="min")
+    # print(lmin)
     lower_curve = linear_interpolate(lmin, filtered[lmin], x)
+    # print(lower_curve)
     amplitude = filtered - lower_curve
+    # print(amplitude)
     lmax = hl_extrema_idx(amplitude, mode="max")
+    # print(lmax)
     envelope = linear_interpolate(lmax, amplitude[lmax], x)
+    # print(envelope)
 
     MAP_amp = np.max(envelope)
     MAP_idx = np.argmax(envelope)
     
     SBP_amp = 0.487 * MAP_amp
     DBP_amp = 0.658 * MAP_amp
+    # print(f"MAP = {MAP_amp:.2f}")
+    # print(f"SBP_amp = {SBP_amp:.2f}")
+    # print(f"DBP_amp = {DBP_amp:.2f}")
 
-    SBP_idx = next(i for i in range(MAP_idx-1, -1, -1) if envelope[i] <= SBP_amp)
-    DBP_idx = next(i for i in range(MAP_idx+1, len(envelope)) if envelope[i] <= DBP_amp)
-
-    print(f"MAP = {data[MAP_idx]}")
-    print(f"SBP = {data[SBP_idx]}")
-    print(f"DBP = {data[DBP_idx]}")
+    # SBP_idx = next(i for i in range(MAP_idx-1, -1, -1) if envelope[i] <= SBP_amp)
+    # DBP_idx = next(i for i in range(MAP_idx+1, len(envelope)) if envelope[i] <= DBP_amp)
+    # print(f"SBP_idx = {SBP_idx}")
+    # print(f"DBP_idx = {DBP_idx}")
+    
+    # print(f"MAP = {original[MAP_idx]}")
+    # print(f"SBP = {original[SBP_idx]}")
+    # print(f"DBP = {original[DBP_idx]}")
 
     plt.figure(figsize=(12, 6))
-    plt.plot(x, data, label="Original Data", color='blue')
+    plt.plot(x, original, label="Original Data", color='blue')
     plt.plot(x, amplitude, label="BP Amplitude", color='orange')
     plt.plot(x, envelope, label="Amplitude Envelope", color='mediumorchid')
-    plt.axhline(y=MAP_amp, color='black', linestyle='--', label="MAP")
-    plt.axhline(y=DBP_amp, color='purple', linestyle='--', label="DIA")
-    plt.axhline(y=SBP_amp, color='blue', linestyle='--', label="SYS")
-    plt.scatter([MAP_idx], [data[MAP_idx]], color='black', label=f"MAP = {data[MAP_idx]:.2f}", zorder=5)
-    plt.scatter([SBP_idx], [data[SBP_idx]], color='orange', label=f"SYS = {data[SBP_idx]:.2f}", zorder=5)
-    plt.scatter([DBP_idx], [data[DBP_idx]], color='orange', label=f"DIA = {data[DBP_idx]:.2f}", zorder=5)
+    # plt.axhline(y=MAP_amp, color='black', linestyle='--', label="MAP")
+    # plt.axhline(y=DBP_amp, color='purple', linestyle='--', label="DIA")
+    # plt.axhline(y=SBP_amp, color='blue', linestyle='--', label="SYS")
+    # plt.scatter([MAP_idx], [original[MAP_idx]], color='black', label=f"MAP = {original[MAP_idx]:.2f}", zorder=5)
+    # plt.scatter([SBP_idx], [original[SBP_idx]], color='orange', label=f"SYS = {original[SBP_idx]:.2f}", zorder=5)
+    # plt.scatter([DBP_idx], [original[DBP_idx]], color='orange', label=f"DIA = {original[DBP_idx]:.2f}", zorder=5)
     plt.title("Original vs Filtered Data")
     plt.xlabel("Sample Index")
     plt.ylabel("Blood Pressure (mmHg)")
@@ -94,7 +122,4 @@ def plot_full_map_analysis(data):
     plt.show()
 
 if __name__ == "__main__":
-    data = [150.10, 150.97, 151.72, 150.46, 149.92, 148.87, 148.11, 147.35, 146.62, 145.99, 145.92, 145.00, 144.46, 143.63, 142.78, 142.07, 141.75, 141.14, 140.95, 140.60, 140.20, 139.72, 139.65, 138.96, 138.56, 138.01, 137.52, 137.37, 136.79, 136.20, 135.61, 134.97, 134.49, 134.89, 134.33, 133.99, 133.45, 132.86, 132.51, 132.69, 131.70, 131.31, 130.83, 130.39, 130.04, 130.10, 129.12, 128.67, 128.19, 127.65, 127.82, 127.62, 126.82, 126.45, 126.00, 125.60, 126.14, 125.83, 124.92, 124.52, 124.10, 123.59, 123.81, 123.75, 122.60, 122.31, 121.80, 121.41, 121.30, 121.68, 120.62, 120.09, 119.64, 119.11, 118.63, 119.47, 118.86, 117.80, 117.81, 117.41, 117.23, 117.68, 117.28, 115.74, 115.88, 115.11, 115.33, 115.64, 115.59, 114.51, 114.04, 113.64, 113.13, 113.10, 113.67, 112.70, 112.20, 111.91, 111.58, 111.39, 112.15, 111.25, 110.51, 110.11, 109.91, 109.52, 110.44, 109.71, 108.87, 108.42, 108.05, 107.74, 108.65, 107.96, 107.13, 106.56, 106.07, 105.64, 106.30, 106.27, 105.46, 105.05, 104.62, 104.21, 104.28, 104.95, 103.90, 103.33, 103.16, 102.85, 102.58, 103.39, 102.90, 102.05, 101.68, 101.36, 100.93, 100.98, 101.59, 100.84, 99.99, 99.63, 99.32, 99.01, 99.64, 99.47, 98.54, 98.18, 97.78, 97.47, 97.28, 98.26, 97.65, 96.85, 96.49, 96.15, 95.80, 96.27, 96.43, 95.53, 94.84, 94.32, 93.90, 93.79, 94.69, 94.15, 93.45, 93.12, 92.81, 92.53, 93.35, 93.24, 92.48, 91.98, 91.62, 91.35, 91.62, 92.23, 91.69, 91.04, 90.58, 90.27, 90.00, 91.16, 90.82, 90.15, 89.64, 89.21, 88.76, 89.09, 89.58, 89.10, 88.64, 88.15, 87.78, 87.55, 88.60, 88.21, 87.63, 87.22, 86.86, 86.53, 87.47, 87.17, 86.66, 85.75, 85.17, 85.01, 86.03, 85.92, 85.46, 85.22, 84.57, 84.07, 84.66, 85.10, 84.61, 84.17, 83.56, 83.06, 83.01, 83.81, 83.62, 83.09, 82.63, 82.17, 81.80, 82.80, 82.75, 82.20, 81.68, 81.15, 80.65, 81.37, 81.74, 80.84, 80.70, 80.15, 79.68, 80.80, 80.77, 80.27, 79.79, 79.28, 78.74, 79.77, 79.74, 79.45, 78.87, 78.37, 77.94, 78.98, 78.91, 78.36, 77.77, 77.18, 76.78, 77.86, 77.77, 77.27, 76.75, 76.19, 75.91, 77.04, 76.84, 76.37, 75.91, 75.45, 75.50, 76.15, 75.83, 75.55, 74.99, 74.63, 75.81, 76.29, 75.79, 75.22, 74.69, 74.26, 75.06, 74.89, 74.49, 74.01, 73.65, 73.84, 74.21, 73.83, 73.52, 73.11, 72.69, 73.41, 73.39, 72.98, 72.72, 72.48, 72.31, 72.91, 72.57, 72.15, 71.71, 71.22, 71.92, 72.08, 71.74, 71.58, 71.23, 70.71, 71.46, 71.33, 70.94, 70.63, 70.32, 69.89, 70.37, 70.55, 70.09, 69.77, 69.34, 68.98, 69.83, 69.80, 69.29, 68.97, 68.60, 68.36, 69.06, 68.94, 68.41, 68.02, 67.68, 68.00, 68.28, 68.02, 67.61, 67.38, 67.16, 67.74, 67.95, 67.63, 67.37, 66.97, 66.55, 67.20, 67.49, 67.04, 66.65, 66.19, 65.84, 66.36, 66.72, 66.47, 66.17, 65.82, 65.29, 66.05, 66.08, 65.71, 65.33, 64.97, 64.58, 65.40, 65.44, 65.03, 64.71, 64.37, 63.99, 64.68, 64.96, 64.53, 64.29, 63.94, 63.55, 64.32, 64.22, 63.84, 63.65, 63.26, 62.91, 63.54, 63.48, 63.14, 62.93, 62.24, 62.16, 62.88, 62.86, 62.58, 62.29, 62.02, 61.71, 62.47, 62.51, 62.17, 61.71, 61.34, 60.92, 61.65, 61.71, 61.56, 61.32, 61.05, 60.58, 61.10, 61.14, 60.93, 60.71, 60.47, 60.12, 60.52, 60.71, 60.49, 60.28, 59.96, 59.70, 59.66, 60.16, 59.96, 59.73, 59.55, 59.21, 58.99, 59.61, 59.46, 59.17, 58.91, 58.52, 58.18, 58.81, 58.71, 58.45, 58.18, 57.95, 57.25, 58.25, 58.22, 57.99, 57.73, 57.55, 57.21, 57.56, 57.63, 57.30, 57.21, 57.03, 56.83, 56.71, 57.30, 57.10, 56.87, 56.53, 55.95, 56.03, 56.67, 56.62, 56.33, 56.10, 55.71, 55.04, 55.74, 55.84, 55.61, 55.40, 55.11, 54.86, 55.07, 55.30, 55.07, 54.90, 54.69, 54.34, 54.35, 54.83, 54.70, 54.39, 54.19, 53.94, 53.64, 54.27, 54.17, 53.96, 53.80, 53.54, 53.30, 53.70, 53.68, 53.49, 53.20, 52.97, 52.63, 53.19, 53.22, 53.04, 52.84, 52.63, 52.40, 52.79, 52.80, 52.57, 52.35, 51.84, 51.87, 52.07, 52.25, 52.04, 51.90, 51.71, 51.44, 51.28, 51.77, 51.64, 51.48, 51.38, 51.17, 50.85, 51.27, 51.03, 50.70, 50.56, 50.39, 50.19, 50.56, 50.37, 50.17, 50.08]
-    
-    
-    plot_full_map_analysis(data)
+    plot_full_map_analysis("test_data.csv")
