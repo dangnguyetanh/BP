@@ -100,7 +100,7 @@ def plot_full_map_analysis(csv_file):
 
     plt.figure(figsize=(12, 6))
     plt.plot(x, original, label="Original Data", color='blue', alpha=0.5)
-    # plt.plot(x, final_denoised, label="Final Denoised Data", color='green')
+    plt.plot(x, final_denoised, label="Final Denoised Data", color='green')
     plt.plot(x, amplitude, label="BP Amplitude", color='orange')
     plt.plot(x, envelope, label="Amplitude Envelope", color='mediumorchid')
     plt.axhline(y=MAP_amp, color='black', linestyle='--', label="MAP")

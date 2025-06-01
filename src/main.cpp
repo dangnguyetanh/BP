@@ -145,7 +145,6 @@ void setup() {
 void loop() {
   if (!mqttClient.connected()) mqttReconnect();
   mqttClient.loop();
-  mqttClient.publish(mqtt_topic, "loop running");
   unsigned long currentMillis = millis();
   
   M5.update();
@@ -354,7 +353,7 @@ void loop() {
         programState = AWAITING_BP_START;
         check_state();
 
-        delay(2000);  
+        delay(1000);  
 
         const char* readyMsg[] = { "PRESS BUTTON", "TO RESTART BP" };
         displayMessage(readyMsg, 2);
@@ -400,10 +399,6 @@ void loop() {
           // In dữ liệu áp suất
           for (int i = 0; i < dataCount; i++) {
             bool result = mqttClient.publish(mqtt_topic, String(dataArr[i]).c_str());
-            Serial.print("Publish dataArr[");
-            Serial.print(i);
-            Serial.print("]: ");
-            Serial.println(result ? "Success" : "Fail");
 
             Serial.print(dataArr[i]);
             Serial.print(", ");
