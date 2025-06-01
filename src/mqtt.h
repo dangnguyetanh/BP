@@ -9,7 +9,7 @@ const char* password = "khoa5470";
 
 const char* mqtt_server = "mqtt.fuvitech.vn"; 
 const int mqtt_port = 1883;
-const char* mqtt_topic = "v1/devices/me/telemetry";
+const char* mqtt_topic = "Khoa/data";
 // const char* mqtt_user = "bp";           // Username MQTT
 // const char* mqtt_password = "bp";  // Password MQTT
 const char* clientID = "bp";

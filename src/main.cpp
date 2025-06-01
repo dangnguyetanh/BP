@@ -2,11 +2,39 @@
 #include <Wire.h>
 #include <M5AtomS3.h>
 #include "process.h"
-#include "bp.h"
+// #include "bp.h"
 #include "MAX30100_PulseOximeter.h"
 #include "mqtt.h"
 #include <ArduinoJson.h>
+#include <TensorFlowLite_ESP32.h>
+#include "model_data.h"
+#include <tensorflow/lite/micro/all_ops_resolver.h>
+#include <tensorflow/lite/micro/micro_interpreter.h>
+#include <tensorflow/lite/micro/micro_error_reporter.h> // Thay micro_log.h
+#include <tensorflow/lite/schema/schema_generated.h>
+#include <tensorflow/lite/micro/micro_mutable_op_resolver.h>
+#include <tensorflow/lite/micro/micro_allocator.h>
 
+// Add these global variables for MQTT subscription
+float SBP_value = 0;
+float DBP_value = 0;
+bool bp_data_received = false;
+String riskResult = "";
+// Cấu hình mô hình
+namespace {
+tflite::MicroInterpreter* interpreter = nullptr;
+TfLiteTensor* input = nullptr;
+TfLiteTensor* output = nullptr;
+constexpr int kTensorArenaSize = 16 * 1024;
+uint8_t tensor_arena[kTensorArenaSize];
+tflite::ErrorReporter* error_reporter = nullptr;
+const tflite::Model* model = nullptr;
+tflite::MicroAllocator* allocator = nullptr;
+}  // namespace
+
+// Thông số chuẩn hóa (cập nhật từ scaler_mean.npy và scaler_scale.npy)
+float scaler_mean[4] = {79.53374663,97.50437243, 124.4379712, 79.49962504  };
+float scaler_scale[4] = { 11.55286498, 1.44259433,8.65692398, 5.75723374 };
 
 // Biến và hằng số cho cảm biến MAX30100
 PulseOximeter pox;
@@ -38,7 +66,97 @@ enum ProgramState {
 
 ProgramState programState = WAITING_FOR_FINGER;
 
-// Callback được gọi khi phát hiện nhịp tim
+// Add this function to perform the health risk prediction
+void predictHealthRisk(float heartRate, int spO2, float sbp, float dbp) {
+  // Normalize the input data based on the training scaler
+  float normalized_hr = (heartRate - scaler_mean[0]) / scaler_scale[0];
+  float normalized_spo2 = (spO2 - scaler_mean[1]) / scaler_scale[1];
+  float normalized_sbp = (sbp - scaler_mean[2]) / scaler_scale[2];
+  float normalized_dbp = (dbp - scaler_mean[3]) / scaler_scale[3];
+  
+  // Set input tensor values
+  input->data.f[0] = normalized_hr;
+  input->data.f[1] = normalized_spo2;
+  input->data.f[2] = normalized_sbp;
+  input->data.f[3] = normalized_dbp;
+  
+  // Run inference
+  TfLiteStatus invoke_status = interpreter->Invoke();
+  if (invoke_status != kTfLiteOk) {
+    error_reporter->Report("Invoke failed");
+    riskResult = "Error";
+    return;
+  }
+  
+  // Get the output and determine risk level
+  float risk_score = output->data.f[0];
+  Serial.print("Risk score: ");
+  Serial.println(risk_score);
+  
+  if (risk_score > 0.5) {
+    riskResult = "High Risk";
+  } else {
+    riskResult = "Low Risk";
+  }
+  
+  Serial.print("Risk prediction: ");
+  Serial.println(riskResult);
+  
+  // Publish the complete result back to MQTT
+  DynamicJsonDocument resultDoc(256);
+  resultDoc["HR"] = heartRate;
+  resultDoc["SPO2"] = spO2;
+  resultDoc["SBP"] = sbp;
+  resultDoc["DBP"] = dbp;
+  resultDoc["Risk"] = riskResult;
+  
+  String resultJson;
+  serializeJson(resultDoc, resultJson);
+  mqttClient.publish("Khoa/health_results", resultJson.c_str());
+}
+// Add this callback function for MQTT message reception
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  
+  // Create a buffer for the payload
+  char message[length + 1];
+  for (int i = 0; i < length; i++) {
+    message[i] = (char)payload[i];
+  }
+  message[length] = '\0';
+  Serial.println(message);
+
+  // Process the BP results from MQTT
+  if (String(topic) == "Khoa/bp_results") {
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, message);
+    
+    if (!error) {
+      SBP_value = doc["SBP"];
+      DBP_value = doc["DBP"];
+      bp_data_received = true;
+      
+      Serial.print("Received BP values - SBP: ");
+      Serial.print(SBP_value);
+      Serial.print(", DBP: ");
+      Serial.println(DBP_value);
+      
+      // Predict risk once BP data is received
+      if (programState == MEASURING_BP && bp_data_received && finalHeartRate > 0 && finalSpO2 > 0) {
+        predictHealthRisk(finalHeartRate, finalSpO2, SBP_value, DBP_value);
+        programState = COMPLETED;
+      }
+    } else {
+      Serial.print("deserializeJson() failed: ");
+      Serial.println(error.c_str());
+    }
+  }
+}
+
+
+
 void onBeatDetected() {
   Serial.println("Beat detected!");
   if (programState == WAITING_FOR_FINGER) {
@@ -75,13 +193,51 @@ void displayMessage(const char* messages[], int lines, int textSize = 2, int x =
 }
 
 void setup() {
+    static tflite::MicroErrorReporter micro_error_reporter;
+  error_reporter = &micro_error_reporter;
+
+  // Load mô hình
+  model = tflite::GetModel(health_risk_model_tflite);
+  if (model->version() != TFLITE_SCHEMA_VERSION) {
+    error_reporter->Report("Model version mismatch!");
+    return;
+  }
+
+  // Thiết lập OpResolver
+  static tflite::MicroMutableOpResolver<5> micro_op_resolver;
+  micro_op_resolver.AddFullyConnected();
+  micro_op_resolver.AddRelu();
+  micro_op_resolver.AddLogistic();
+  micro_op_resolver.AddReshape();
+  micro_op_resolver.AddQuantize();
+
+  // Thiết lập MicroAllocator
+  allocator = tflite::MicroAllocator::Create(tensor_arena, kTensorArenaSize, error_reporter);
+
+  // Khởi tạo interpreter
+  static tflite::MicroInterpreter static_interpreter(
+      model, micro_op_resolver, allocator, error_reporter);
+  interpreter = &static_interpreter;
+
+  // Cấp phát bộ nhớ
+  TfLiteStatus allocate_status = interpreter->AllocateTensors();
+  if (allocate_status != kTfLiteOk) {
+    error_reporter->Report("AllocateTensors() failed");
+    return;
+  }
+
+  // Lấy tensor input và output
+  input = interpreter->input(0);
+  output = interpreter->output(0);
   M5.begin();
   Serial.begin(115200);
   Wire.begin(2, 1);
 
   connectWiFi();
   mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
   mqttReconnect();
+  mqttClient.subscribe("Khoa/bp_results");
   mqttClient.publish(mqtt_topic, "hello from ESP32");
   // Configure NTP for real-time
   configTime(7 * 3600, 0, "pool.ntp.org");  // UTC+7 for Vietnam
@@ -349,7 +505,6 @@ void loop() {
         const char* stopMsg[] = { "MEASUREMENT", "STOPPED" };
         displayMessage(stopMsg, 2);
 
-        // Thay đổi ở đây - chuyển sang trạng thái AWAITING_BP_START thay vì COMPLETED
         programState = AWAITING_BP_START;
         check_state();
 
@@ -358,7 +513,6 @@ void loop() {
         const char* readyMsg[] = { "PRESS BUTTON", "TO RESTART BP" };
         displayMessage(readyMsg, 2);
 
-        // Reset biến đếm dữ liệu
         dataCount = 0;
       }
 
@@ -384,68 +538,75 @@ void loop() {
           dataArr[dataCount++] = pressure;
         }
 
-        
-
-
         check_state();
 
         // Kiểm tra khi quá trình thu thập dữ liệu kết thúc
         if (state == IDLE && dataCount > 0) {
           check_state();
-          bp_process(dataArr, dataCount);
 
-          Serial.println("Data collection completed. Printing data:");
+          Serial.println("Data collection completed. Publishing data to MQTT...");
 
-          // In dữ liệu áp suất
+          // Publish BP data to MQTT for Python processing
           for (int i = 0; i < dataCount; i++) {
             bool result = mqttClient.publish(mqtt_topic, String(dataArr[i]).c_str());
 
-            Serial.print(dataArr[i]);
-            Serial.print(", ");
             if (i % 10 == 9) {
-              delay(100);
+              delay(100); // Small delay every 10 messages to avoid overloading the broker
             }
           }
 
           Serial.println();
-          Serial.print("Total samples collected: ");
+          Serial.print("Total samples published: ");
           Serial.println(dataCount);
-
-          // Hiển thị kết quả đo trên màn hình
+          
+          // Display waiting message
           M5.Display.fillScreen(BLACK);
           M5.Display.setTextSize(2);
-
-          char hrStr[20], spo2Str[20], sbpStr[20], dbpStr[20], riskStr[20];
-          sprintf(hrStr, "HR: %.1f", finalHeartRate);
-          sprintf(spo2Str, "SpO2: %d%%", finalSpO2);
-          sprintf(sbpStr, "SBP: %.0f", SBP_value);
-          sprintf(dbpStr, "DBP: %.0f", DBP_value);
-
-          M5.Display.drawString("RESULTS:", 64, 20);
-          M5.Display.setTextSize(1);
-          M5.Display.drawString(hrStr, 64, 45);
-          M5.Display.drawString(spo2Str, 64, 65);
-          M5.Display.drawString(sbpStr, 64, 85);
-          M5.Display.drawString(dbpStr, 64, 105);
-
-          // Đặt màu cho kết quả nguy cơ
-          // if (riskResult == "High Risk") {
-          //   M5.Display.setTextColor(RED);
-          // } else {
-          //   M5.Display.setTextColor(GREEN);
-          // }
-          M5.Display.drawString(riskStr, 64, 125);
-          M5.Display.setTextColor(WHITE);
-          M5.Display.drawString("PRESS BUTTON TO RESTART", 64, 145);
-
+          M5.Display.drawString("PROCESSING", 64, 40);
+          M5.Display.drawString("PLEASE WAIT", 64, 70);
+          
+          // Wait for BP results to come back via MQTT
+          // The processing will continue in the MQTT callback
+          
           dataCount = 0;
-          programState = COMPLETED;
-          Serial.println("\nMeasurement session finished.");
         }
       }
       break;
 
     case COMPLETED:
+      // Display results only once when entering this state
+      if (bp_data_received) {
+        bp_data_received = false; // Reset for next time
+        
+        // Hiển thị kết quả đo trên màn hình
+        M5.Display.fillScreen(BLACK);
+        M5.Display.setTextSize(2);
+
+        char hrStr[20], spo2Str[20], sbpStr[20], dbpStr[20], riskStr[30];
+        sprintf(hrStr, "HR: %.1f", finalHeartRate);
+        sprintf(spo2Str, "SpO2: %d%%", finalSpO2);
+        sprintf(sbpStr, "SBP: %.0f", SBP_value);
+        sprintf(dbpStr, "DBP: %.0f", DBP_value);
+        sprintf(riskStr, "Risk: %s", riskResult.c_str());
+
+        M5.Display.drawString("RESULTS:", 64, 20);
+        M5.Display.setTextSize(1);
+        M5.Display.drawString(hrStr, 64, 45);
+        M5.Display.drawString(spo2Str, 64, 65);
+        M5.Display.drawString(sbpStr, 64, 85);
+        M5.Display.drawString(dbpStr, 64, 105);
+
+        // Đặt màu cho kết quả nguy cơ
+        if (riskResult == "High Risk") {
+          M5.Display.setTextColor(RED);
+        } else {
+          M5.Display.setTextColor(GREEN);
+        }
+        M5.Display.drawString(riskStr, 64, 125);
+        M5.Display.setTextColor(WHITE);
+        M5.Display.drawString("PRESS BUTTON TO RESTART", 64, 145);
+      }
+
       // Đợi nhấn nút để bắt đầu một phiên đo mới
       if (digitalRead(BUTTON_PIN) == LOW) {
         while (digitalRead(BUTTON_PIN) == LOW) {}
@@ -459,6 +620,9 @@ void loop() {
         stableCount = 0;
         measurementCount = 0;
         state = IDLE;
+        bp_data_received = false;
+        SBP_value = 0;
+        DBP_value = 0;
         programState = WAITING_FOR_FINGER;
 
         // Hiển thị thông báo ban đầu
@@ -471,3 +635,4 @@ void loop() {
       break;
   }
 }
+

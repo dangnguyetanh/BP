@@ -15,7 +15,7 @@ last_message_time = 0
 def on_connect(client, userdata, flags, rc, properties):
     print(f"Connected with result code {rc}")
     # Subscribe to the pressure data topic
-    client.subscribe("v1/devices/me/telemetry")
+    client.subscribe("Khoa/data")
 
 def on_message(client, userdata, msg):
     global pressure_data, data_ready, last_message_time
@@ -122,7 +122,7 @@ def analyze_bp_data(original, mqtt_client):
         "DBP": round(DBP_value, 1)
     }
     bp_json = json.dumps(bp_result)
-    mqtt_client.publish("v1/devices/me/bp_results", bp_json)
+    mqtt_client.publish("Khoa/bp_results", bp_json)
     print(f"Published BP results to MQTT: {bp_json}")
 
     plt.figure(figsize=(12, 6))
